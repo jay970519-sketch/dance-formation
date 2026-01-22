@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>隊形模擬器 Pro - 檔案導出版</title>
+<style>
+  body { font-family: sans-serif; display: flex; background-color: #f0f2f5; margin: 0; overflow: hidden; }
+  #panel { width: 280px; padding: 15px; background: #fff; border-right: 1px solid #ddd; height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; }
+  #canvas-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #555; height: 100vh; overflow: auto; }
+  canvas { border: 2px solid #333; cursor: crosshair; background-color: #fff; box-shadow: 0 4px 15px rgba(0,0,0,0.3); display: block; }
+  
+  .setting-group { background: #f9f9f9; padding: 12px; border-radius: 6px; margin-bottom: 10px; border: 1px solid #eee; }
+  .input-row { display: flex; gap: 10px; margin-bottom: 8px; }
+  .setting-group input { width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+  
+  .btn-init { background: #2196f3; color: white; border: none; padding: 8px; cursor: pointer; border-radius: 4px; width: 100%; font-weight: bold; }
+  .btn-main { background: #4caf50; color: white; border: none; font-weight: bold; padding: 12px; font-size: 15px; margin-bottom: 10px; cursor: pointer; border-radius: 4px; }
+  .btn-tool { background: #607d8b; color: white; border: none; padding: 8px; font-size: 12px; cursor: pointer; border-radius: 4px; width: 100%; margin-bottom: 5px; }
+
+  #list { flex-grow: 1; overflow-y: auto; padding-top: 10px; border-top: 1px solid #eee; }
+  .formation-row { display: flex; align-items: center; margin-bottom: 8px; gap: 5px; }
+  .formation-item { flex-grow: 1; padding: 10px; cursor: pointer; border-radius: 4px; border: 1px solid #ccc; background: #fff; text-align: left; }
+  .formation-item.active { background: #e8f5e9; border-color: #4caf50; font-weight: bold; }
+  .btn-del { background: #ff5252; color: white; border: none; width: 35px; height: 38px; cursor: pointer; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<div id="panel">
+  <h2>隊形編輯器</h2>
+  
+  <div class="setting-group">
+    <div class="input-row">
+      <div><label>總人數</label><input type="number" id="totalCount" value="36"></div>
+      <div><label>女生數</label><input type="number" id="femaleCount" value="18"></div>
+    </div>
+    <button class="btn-init" onclick="reInitialize()">重設/初始化</button>
+  </div>
+
+  <button class="btn-main" onclick="newFormation()">＋ 保存目前隊形</button>
+  
+  <div style="margin-bottom: 10px;">
+    <button class="btn-tool" onclick="downloadImg()">📸 導出目前圖片 (.png)</button>
+    <button class="btn-tool" style="background: #fb8c00;" onclick="exportToFile()">💾 導出備份檔 (.json)</button>
+    <button class="btn-tool" style="background: #7e57c2;" onclick="document.getElementById('fileInput').click()">📂 匯入備份檔</button>
+    <input type="file" id="fileInput" style="display:none" onchange="importFromFile(event)">
+  </div>
+
+  <button class="btn-tool" style="background: #26a69a;" onclick="shareURL()">🔗 複製長網址分享</button>
+  
+  <div id="list"></div>
+</div>
+
+<div id="canvas-container">
+  <canvas id="field" width="1000" height="600"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById("field");
+const ctx = canvas.getContext("2d");
+const GRID = 25, R = 12;
+
+let people = [], formations = [], currentIdx = -1, selected = [];
+let dragging = null, boxSelect = null, animating = false, isMoving = false;
+
+function getMousePos(e) { return { x: e.offsetX, y: e.offsetY }; }
+function snap(v){ return Math.round(v/GRID)*GRID; }
+
+// --- 自動存檔與讀取 ---
+function saveToLocal() {
+  const data = {
+    total: document.getElementById('totalCount').value,
+    female: document.getElementById('femaleCount').value,
+    forms: formations,
+    currentIdx: currentIdx
+  };
+  localStorage.setItem('dance_data_v2', JSON.stringify(data));
+}
+
+function initPeople() {
+  const total = parseInt(document.getElementById('totalCount').value) || 1;
+  const female = parseInt(document.getElementById('femaleCount').value) || 0;
+  people = [];
+  for(let i=0; i<total; i++) {
+    people.push({ id: i, x: 150 + (i % 12) * 60, y: 100 + Math.floor(i / 12) * 60, gender: i < female ? "female" : "male" });
+  }
+  selected = []; draw();
+}
+
+function reInitialize() {
+  if(confirm("重設將刪除此瀏覽器內的所有隊形！確定？")) {
+    formations = []; initPeople(); newFormation(); saveToLocal();
+  }
+}
+
+// --- 檔案導出功能 ---
+function exportToFile() {
+  const data = {
+    total: document.getElementById('totalCount').value,
+    female: document.getElementById('femaleCount').value,
+    forms: formations
+  };
+  const blob = new Blob([JSON.stringify(data)], {type: "application/json"});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `隊形紀錄_${new Date().getMonth()+1}${new Date().getDate()}.json`;
+  link.click();
+}
+
+// --- 檔案匯入功能 ---
+function importFromFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const decoded = JSON.parse(e.target.result);
+      document.getElementById('totalCount').value = decoded.total;
+      document.getElementById('femaleCount').value = decoded.female;
+      formations = decoded.forms;
+      currentIdx = 0;
+      people = JSON.parse(JSON.stringify(formations[0].data));
+      saveToLocal(); updateList(); draw();
+      alert("檔案匯入成功！");
+    } catch(err) { alert("檔案格式錯誤！"); }
+  };
+  reader.readAsText(file);
+}
+
+// --- 繪圖邏輯 ---
+function drawBackground(){
+  ctx.fillStyle="#e9efe9"; ctx.fillRect(0,0,1000,600);
+  ctx.strokeStyle="#d8d8d8"; ctx.lineWidth = 1;
+  for(let x=0; x<=1000; x+=GRID){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,600); ctx.stroke(); }
+  for(let y=0; y<=600; y+=GRID){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(1000,y); ctx.stroke(); }
+  const standW = 240, standH = 45, standX = (1000-standW)/2, standY = 530;
+  ctx.fillStyle = "#2c3e50"; ctx.fillRect(standX, standY, standW, standH);
+  ctx.fillStyle = "#fff"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "center";
+  ctx.fillText("裁 判 台 (正面)", 1000/2, standY + 28);
+  ctx.setLineDash([10, 5]); ctx.strokeStyle = "rgba(255, 0, 0, 0.3)";
+  ctx.beginPath(); ctx.moveTo(1000/2, 0); ctx.lineTo(1000/2, 600); ctx.stroke(); ctx.setLineDash([]);
+}
+
+function draw(){
+  ctx.clearRect(0,0,1000,600);
+  drawBackground();
+  people.forEach(p=>{
+    ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI*2);
+    ctx.fillStyle = p.gender==="male" ? "#2b6cff" : "#e63946"; ctx.fill();
+    if(selected.includes(p)){ ctx.strokeStyle="#000"; ctx.lineWidth = 3; ctx.stroke(); }
+    else { ctx.strokeStyle="rgba(0,0,0,0.1)"; ctx.lineWidth = 1; ctx.stroke(); }
+  });
+  if(boxSelect){
+    ctx.strokeStyle="#2196f3"; ctx.setLineDash([5,5]); ctx.strokeRect(boxSelect.x, boxSelect.y, boxSelect.w, boxSelect.h);
+    ctx.setLineDash([]); ctx.fillStyle = "rgba(33, 150, 243, 0.1)"; ctx.fillRect(boxSelect.x, boxSelect.y, boxSelect.w, boxSelect.h);
+  }
+}
+
+// 基礎互動 (拖曳、點擊、切換) 同前...
+canvas.onmousedown = e => {
+  const {x, y} = getMousePos(e);
+  let hit = people.find(p => Math.hypot(p.x-x, p.y-y) < R + 5);
+  if(hit){ if(!selected.includes(hit)) selected = [hit]; dragging = hit; isMoving = false; }
+  else { selected = []; boxSelect = { x, y, w: 0, h: 0 }; }
+  draw();
+};
+
+canvas.onmousemove = e => {
+  const {x, y} = getMousePos(e);
+  if(dragging){
+    const dx = snap(x) - dragging.x, dy = snap(y) - dragging.y;
+    if(dx !== 0 || dy !== 0){
+      isMoving = true; selected.forEach(p => { p.x += dx; p.y += dy; });
+      if(formations[currentIdx]) formations[currentIdx].data = JSON.parse(JSON.stringify(people));
+      draw();
+    }
+  }
+  if(boxSelect){ boxSelect.w = x - boxSelect.x; boxSelect.h = y - boxSelect.y; draw(); }
+};
+
+canvas.onmouseup = e => {
+  if(isMoving) saveToLocal();
+  if(boxSelect){
+    const x1 = Math.min(boxSelect.x, boxSelect.x + boxSelect.w), y1 = Math.min(boxSelect.y, boxSelect.y + boxSelect.h);
+    const x2 = Math.max(boxSelect.x, boxSelect.x + boxSelect.w), y2 = Math.max(boxSelect.y, boxSelect.y + boxSelect.h);
+    selected = people.filter(p => p.x > x1 && p.x < x2 && p.y > y1 && p.y < y2);
+    boxSelect = null; draw();
+  }
+  dragging = null;
+};
+
+function downloadImg() {
+  selected = []; draw();
+  const link = document.createElement('a');
+  link.download = (formations[currentIdx]?.name || '隊形') + '.png';
+  link.href = canvas.toDataURL(); link.click();
+}
+
+function shareURL() {
+  const data = JSON.stringify({ total: document.getElementById('totalCount').value, female: document.getElementById('femaleCount').value, forms: formations });
+  const url = window.location.origin + window.location.pathname + "?import=" + btoa(encodeURIComponent(data));
+  navigator.clipboard.writeText(url).then(() => { alert("分享網址已複製！"); });
+}
+
+function loadSession() {
+  const local = localStorage.getItem('dance_data_v2');
+  if (local) {
+    const decoded = JSON.parse(local);
+    document.getElementById('totalCount').value = decoded.total;
+    document.getElementById('femaleCount').value = decoded.female;
+    formations = decoded.forms;
+    currentIdx = decoded.currentIdx || 0;
+    people = JSON.parse(JSON.stringify(formations[currentIdx].data));
+  } else {
+    initPeople(); newFormation();
+  }
+  updateList(); draw();
+}
+
+function newFormation(){
+  const name = "隊形 " + (formations.length + 1);
+  formations.push({ name, data: JSON.parse(JSON.stringify(people)) });
+  currentIdx = formations.length - 1; updateList(); saveToLocal();
+}
+
+function switchFormation(idx){
+  currentIdx = idx; people = JSON.parse(JSON.stringify(formations[idx].data));
+  updateList(); draw(); saveToLocal();
+}
+
+function deleteFormation(e, idx){
+  e.stopPropagation(); if(formations.length <= 1) return;
+  formations.splice(idx, 1);
+  currentIdx = Math.min(currentIdx, formations.length - 1);
+  people = JSON.parse(JSON.stringify(formations[currentIdx].data));
+  updateList(); draw(); saveToLocal();
+}
+
+function updateList(){
+  const list = document.getElementById("list"); list.innerHTML = "";
+  formations.forEach((f, idx) => {
+    const row = document.createElement("div"); row.className = "formation-row";
+    const btn = document.createElement("button"); btn.className = "formation-item" + (idx === currentIdx ? " active" : "");
+    btn.textContent = f.name; btn.onclick = () => switchFormation(idx);
+    const del = document.createElement("button"); del.className = "btn-del"; del.innerHTML = "×"; del.onclick = (e) => deleteFormation(e, idx);
+    row.appendChild(btn); row.appendChild(del); list.appendChild(row);
+  });
+}
+
+window.onload = loadSession;
+</script>
+</body>
+</html>
